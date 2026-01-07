@@ -1,9 +1,25 @@
 import express from "express";
+import cors from "cors";
 import { chromium } from "playwright";
 
 const app = express();
+
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(express.json());
 
+/**
+ * POST /imar
+ * body:
+ * {
+ *   "ada": "10568",
+ *   "parsel": "9"
+ * }
+ */
 app.post("/imar", async (req, res) => {
   const { ada, parsel } = req.body;
 
@@ -12,45 +28,66 @@ app.post("/imar", async (req, res) => {
   }
 
   let browser;
+
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
 
-    const page = await browser.newPage({
-      viewport: { width: 1280, height: 800 },
+    const context = await browser.newContext({
+      viewport: { width: 1366, height: 768 }
     });
 
-    console.log("KEOS açılıyor...");
-    await page.goto("https://keos.seyhan.bel.tr:4443/keos/", {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
+    const page = await context.newPage();
 
-    // Haritanın ve sol panelin gelmesini bekle
-    await page.waitForTimeout(8000);
+    // 1️⃣ KEOS aç
+    await page.goto(
+      "https://keos.seyhan.bel.tr:4443/keos/",
+      { waitUntil: "networkidle", timeout: 60000 }
+    );
 
-    console.log("Arama alanı tıklanıyor...");
-    await page.keyboard.press("Control+f");
-    await page.waitForTimeout(1000);
-
-    // Sol arama inputuna tıkla (harita SDK olduğu için klavye ile)
-    await page.keyboard.type(`${ada}/${parsel}`, { delay: 120 });
+    // 2️⃣ Sol panel arama aç (ikon)
     await page.waitForTimeout(3000);
-    await page.keyboard.press("Enter");
 
-    console.log("Sonuç bekleniyor...");
-    await page.waitForTimeout(6000);
+    // ⚠️ Selector'lar KEOS DOM'una göre örnek
+    // Gerekirse küçük düzeltme yaparız
+    await page.click("button[title*='Ara'], .nc-search-button");
 
-    console.log("E-İmar tıklanıyor...");
-    await page.getByText("E-İmar", { exact: false }).first().click();
+    // 3️⃣ Ada / Parsel seç
+    await page.waitForSelector("input", { timeout: 15000 });
 
-    // İmar sayfasının açılmasını bekle
-    await page.waitForLoadState("networkidle", { timeout: 60000 });
-    await page.waitForTimeout(5000);
+    // Ada
+    await page.fill("input[placeholder*='Ada']", ada);
 
-    const html = await page.content();
+    // Parsel
+    await page.fill("input[placeholder*='Parsel']", parsel);
+
+    // 4️⃣ Ara
+    await page.click("button:has-text('Ara')");
+
+    // 5️⃣ Sonuç yüklenmesini bekle
+    await page.waitForTimeout(4000);
+
+    // 6️⃣ E-İmar butonuna tıkla
+    await page.click("button:has-text('E-İmar'), a:has-text('E-İmar')");
+
+    // 7️⃣ Bilgi paneli açılmasını bekle
+    await page.waitForTimeout(3000);
+
+    // 8️⃣ Panelden veri oku (örnek)
+    const data = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll("table tr"));
+      const result = {};
+      rows.forEach(r => {
+        const cols = r.querySelectorAll("td");
+        if (cols.length === 2) {
+          result[cols[0].innerText.trim()] =
+            cols[1].innerText.trim();
+        }
+      });
+      return result;
+    });
 
     await browser.close();
 
@@ -58,21 +95,25 @@ app.post("/imar", async (req, res) => {
       success: true,
       ada,
       parsel,
-      html, // burada TAKS / KAKS vs parse edeceğiz
+      imar: data
     });
+
   } catch (err) {
     if (browser) await browser.close();
+
     console.error(err);
     return res.status(500).json({
       success: false,
-      error: err.message,
+      error: err.message
     });
   }
 });
 
-app.get("/", (_, res) => res.send("KEOS Playwright backend çalışıyor"));
+app.get("/", (req, res) => {
+  res.send("KEOS E-İmar Playwright Server OK");
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`Server ${PORT} portunda ayakta`)
-);
+app.listen(PORT, () => {
+  console.log(`Server running on ${PORT}`);
+});
