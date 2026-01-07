@@ -3,26 +3,14 @@ import cors from "cors";
 import { chromium } from "playwright";
 
 const app = express();
-
-app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
+app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("İstanbul e-İmar Playwright Server OK");
-});
-
-/*
-POST /istanbul
-{
-  "ilce": "Seyhan",
-  "ada": "10568",
-  "parsel": "9"
-}
-*/
-app.post("/istanbul", async (req, res) => {
+app.post("/imar", async (req, res) => {
   const { ilce, ada, parsel } = req.body;
-  if (!ada || !parsel) {
-    return res.status(400).json({ error: "ada ve parsel zorunlu" });
+
+  if (!ilce || !ada || !parsel) {
+    return res.status(400).json({ error: "ilce, ada, parsel zorunlu" });
   }
 
   let browser;
@@ -32,9 +20,52 @@ app.post("/istanbul", async (req, res) => {
       args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
 
-    const page = await browser.newPage({
-      viewport: { width: 1366, height: 900 }
+    const page = await browser.newPage();
+    await page.goto("https://eplan.ibb.istanbul/sorgu/plansorgu", {
+      waitUntil: "networkidle"
     });
+
+    // İlçe dropdown
+    await page.click("mat-select");
+    await page.click(`mat-option >> text=${ilce}`);
+
+    // Ada / Parsel
+    await page.fill("input[formcontrolname='ada']", ada.toString());
+    await page.fill("input[formcontrolname='parsel']", parsel.toString());
+
+    // Ara
+    await page.click("button >> text=Ara");
+
+    // Sonuç bekle
+    await page.waitForTimeout(5000);
+
+    const text = await page.evaluate(() => document.body.innerText);
+
+    res.json({
+      success: true,
+      ilce,
+      ada,
+      parsel,
+      raw: text
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  } finally {
+    if (browser) await browser.close();
+  }
+});
+
+app.get("/", (req, res) => {
+  res.send("Istanbul e-İmar API çalışıyor");
+});
+
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+});    });
 
     await page.goto(
       "https://eplan.ibb.istanbul/sorgu/plansorgu",
