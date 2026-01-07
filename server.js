@@ -4,74 +4,56 @@ import { chromium } from "playwright";
 const app = express();
 app.use(express.json());
 
+const PORT = process.env.PORT || 3000;
+
+// Sağlık kontrolü
+app.get("/", (req, res) => {
+  res.send("OK - Playwright KEOS Server Running");
+});
+
 app.post("/imar", async (req, res) => {
-  const data = req.body;
+  const { il, ilce, mahalle, ada, parsel } = req.body;
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  });
-
-  const page = await browser.newPage();
-
+  let browser;
   try {
-    await page.goto("https://cbs.adana.bel.tr/imar", {
-      waitUntil: "networkidle",
-      timeout: 60000
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
-    // DEBUG (ilk sefer için)
+    const page = await browser.newPage({
+      viewport: { width: 1280, height: 800 },
+    });
+
+    console.log(">>> KEOS sayfası açılıyor");
+
+    await page.goto("https://keos.seyhan.bel.tr:4443/keos/", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    // ⬇️ KRİTİK: HTML dump (selector çıkarmak için)
+    console.log("===== PAGE HTML START =====");
     console.log(await page.content());
+    console.log("===== PAGE HTML END =====");
 
-    // İlçe
-    await page.waitForSelector('select');
-    await page.selectOption(
-      'select[name*="ilce"], select[id*="ilce"]',
-      { label: data.ilce }
-    );
-
-    // Mahalle
-    await page.waitForTimeout(2000);
-    await page.selectOption(
-      'select[name*="mahalle"], select[id*="mahalle"]',
-      { label: data.mahalle }
-    );
-
-    // Ada
-    await page.fill(
-      'input[name*="ada"], input[id*="ada"]',
-      data.ada
-    );
-
-    // Parsel
-    await page.fill(
-      'input[name*="parsel"], input[id*="parsel"]',
-      data.parsel
-    );
-
-    // Sorgula butonu
-    await page.click('button:has-text("Sorgula"), button:has-text("Getir")');
-
-    await page.waitForTimeout(3000);
-
-    const resultText = await page.textContent("body");
-
-    await browser.close();
-
+    // Şimdilik sadece sayfa açıldığını dönüyoruz
     res.json({
       success: true,
-      result: resultText
+      message: "KEOS sayfası açıldı, HTML loglara basıldı",
+      input: { il, ilce, mahalle, ada, parsel },
     });
-
   } catch (err) {
-    await browser.close();
+    console.error("❌ HATA:", err);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
+  } finally {
+    if (browser) await browser.close();
   }
 });
 
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
