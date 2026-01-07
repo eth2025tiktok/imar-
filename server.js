@@ -4,15 +4,12 @@ import { chromium } from "playwright";
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-
-// Sağlık kontrolü
-app.get("/", (req, res) => {
-  res.send("OK - Playwright KEOS Server Running");
-});
-
 app.post("/imar", async (req, res) => {
-  const { il, ilce, mahalle, ada, parsel } = req.body;
+  const { ada, parsel } = req.body;
+
+  if (!ada || !parsel) {
+    return res.status(400).json({ error: "ada ve parsel zorunlu" });
+  }
 
   let browser;
   try {
@@ -25,35 +22,57 @@ app.post("/imar", async (req, res) => {
       viewport: { width: 1280, height: 800 },
     });
 
-    console.log(">>> KEOS sayfası açılıyor");
-
+    console.log("KEOS açılıyor...");
     await page.goto("https://keos.seyhan.bel.tr:4443/keos/", {
       waitUntil: "domcontentloaded",
       timeout: 60000,
     });
 
-    // ⬇️ KRİTİK: HTML dump (selector çıkarmak için)
-    console.log("===== PAGE HTML START =====");
-    console.log(await page.content());
-    console.log("===== PAGE HTML END =====");
+    // Haritanın ve sol panelin gelmesini bekle
+    await page.waitForTimeout(8000);
 
-    // Şimdilik sadece sayfa açıldığını dönüyoruz
-    res.json({
+    console.log("Arama alanı tıklanıyor...");
+    await page.keyboard.press("Control+f");
+    await page.waitForTimeout(1000);
+
+    // Sol arama inputuna tıkla (harita SDK olduğu için klavye ile)
+    await page.keyboard.type(`${ada}/${parsel}`, { delay: 120 });
+    await page.waitForTimeout(3000);
+    await page.keyboard.press("Enter");
+
+    console.log("Sonuç bekleniyor...");
+    await page.waitForTimeout(6000);
+
+    console.log("E-İmar tıklanıyor...");
+    await page.getByText("E-İmar", { exact: false }).first().click();
+
+    // İmar sayfasının açılmasını bekle
+    await page.waitForLoadState("networkidle", { timeout: 60000 });
+    await page.waitForTimeout(5000);
+
+    const html = await page.content();
+
+    await browser.close();
+
+    return res.json({
       success: true,
-      message: "KEOS sayfası açıldı, HTML loglara basıldı",
-      input: { il, ilce, mahalle, ada, parsel },
+      ada,
+      parsel,
+      html, // burada TAKS / KAKS vs parse edeceğiz
     });
   } catch (err) {
-    console.error("❌ HATA:", err);
-    res.status(500).json({
+    if (browser) await browser.close();
+    console.error(err);
+    return res.status(500).json({
       success: false,
       error: err.message,
     });
-  } finally {
-    if (browser) await browser.close();
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.get("/", (_, res) => res.send("KEOS Playwright backend çalışıyor"));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`Server ${PORT} portunda ayakta`)
+);
