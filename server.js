@@ -1,35 +1,77 @@
 import express from "express";
 import { chromium } from "playwright";
-import fs from "fs";
 
 const app = express();
 app.use(express.json());
 
 app.post("/imar", async (req, res) => {
-  const { site, data } = req.body;
-  const config = JSON.parse(fs.readFileSync(`./sites/${site}.json`, "utf8"));
+  const data = req.body;
 
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
 
   const page = await browser.newPage();
-  await page.goto(config.url, { waitUntil: "networkidle" });
 
-  for (const key in config.fields) {
-    await page.getByLabel(config.fields[key]).fill(data[key]);
+  try {
+    await page.goto("https://cbs.adana.bel.tr/imar", {
+      waitUntil: "networkidle",
+      timeout: 60000
+    });
+
+    // DEBUG (ilk sefer için)
+    console.log(await page.content());
+
+    // İlçe
+    await page.waitForSelector('select');
+    await page.selectOption(
+      'select[name*="ilce"], select[id*="ilce"]',
+      { label: data.ilce }
+    );
+
+    // Mahalle
+    await page.waitForTimeout(2000);
+    await page.selectOption(
+      'select[name*="mahalle"], select[id*="mahalle"]',
+      { label: data.mahalle }
+    );
+
+    // Ada
+    await page.fill(
+      'input[name*="ada"], input[id*="ada"]',
+      data.ada
+    );
+
+    // Parsel
+    await page.fill(
+      'input[name*="parsel"], input[id*="parsel"]',
+      data.parsel
+    );
+
+    // Sorgula butonu
+    await page.click('button:has-text("Sorgula"), button:has-text("Getir")');
+
+    await page.waitForTimeout(3000);
+
+    const resultText = await page.textContent("body");
+
+    await browser.close();
+
+    res.json({
+      success: true,
+      result: resultText
+    });
+
+  } catch (err) {
+    await browser.close();
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
-
-  await page.getByRole("button", {
-    name: new RegExp(config.submitText, "i")
-  }).click();
-
-  await page.waitForTimeout(3000);
-  const html = await page.content();
-
-  await browser.close();
-  res.json({ success: true, html });
 });
 
-app.listen(3000, () => console.log("Playwright imar backend hazır"));
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
