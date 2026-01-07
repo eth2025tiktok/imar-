@@ -4,37 +4,85 @@ import { chromium } from "playwright";
 
 const app = express();
 
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"]
-}));
-
+app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json());
 
-/**
- * POST /imar
- * body:
- * {
- *   "ada": "10568",
- *   "parsel": "9"
- * }
- */
-app.post("/imar", async (req, res) => {
-  const { ada, parsel } = req.body;
+app.get("/", (req, res) => {
+  res.send("İstanbul e-İmar Playwright Server OK");
+});
 
+/*
+POST /istanbul
+{
+  "ilce": "Seyhan",
+  "ada": "10568",
+  "parsel": "9"
+}
+*/
+app.post("/istanbul", async (req, res) => {
+  const { ilce, ada, parsel } = req.body;
   if (!ada || !parsel) {
     return res.status(400).json({ error: "ada ve parsel zorunlu" });
   }
 
   let browser;
-
   try {
     browser = await chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
 
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 900 }
+    });
+
+    await page.goto(
+      "https://eplan.ibb.istanbul/sorgu/plansorgu",
+      { waitUntil: "networkidle", timeout: 60000 }
+    );
+
+    // KVKK / popup çıkarsa kapat
+    await page.waitForTimeout(3000);
+    const kvkkBtn = await page.$("button:has-text('Kabul'), button:has-text('Onay')");
+    if (kvkkBtn) await kvkkBtn.click();
+
+    // Ada/Parsel arama alanları (İBB e-Plan)
+    await page.waitForSelector("input", { timeout: 20000 });
+
+    await page.fill("input[placeholder*='Ada']", ada);
+    await page.fill("input[placeholder*='Parsel']", parsel);
+
+    await page.click("button:has-text('Sorgula'), button:has-text('Ara')");
+    await page.waitForTimeout(5000);
+
+    // Sağ panelde görünen plan/imar metinlerini oku
+    const result = await page.evaluate(() => {
+      const text = document.body.innerText;
+      return text
+        .split("\n")
+        .map(t => t.trim())
+        .filter(t => t.includes("TAKS") || t.includes("KAKS") || t.includes("Emsal") || t.includes("Plan"));
+    });
+
+    await browser.close();
+
+    res.json({
+      success: true,
+      ada,
+      parsel,
+      data: result
+    });
+
+  } catch (err) {
+    if (browser) await browser.close();
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Server running on " + PORT);
+});
     const context = await browser.newContext({
       viewport: { width: 1366, height: 768 }
     });
