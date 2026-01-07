@@ -1,0 +1,10 @@
+{
+  "url": "https://cbs.adana.bel.tr/imar",
+  "fields": {
+    "ilce": "İlçe",
+    "mahalle": "Mahalle",
+    "ada": "Ada",
+    "parsel": "Parsel"
+  },
+  "submitText": "Sorgula"
+}
