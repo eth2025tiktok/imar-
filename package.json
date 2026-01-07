@@ -1,5 +1,5 @@
 {
-  "name": "keos-imar-playwright",
+  "name": "istanbul-eimar-playwright",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
