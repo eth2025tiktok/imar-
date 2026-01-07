@@ -1,12 +1,11 @@
 {
-  "name": "keos-playwright",
-  "version": "1.0.0",
+  "name": "keos-imar",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "playwright": "^1.42.0"
+    "express": "^4.18.2",
+    "playwright": "1.41.0"
   }
 }
