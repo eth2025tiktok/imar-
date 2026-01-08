@@ -36,11 +36,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Supabase Client
-supabase: Client = create_client(
-    os.getenv("SUPABASE_URL", ""),
-    os.getenv("SUPABASE_KEY", "")
-)
+# Supabase Client (opsiyonel)
+SUPABASE_ENABLED = bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY"))
+
+if SUPABASE_ENABLED:
+    supabase: Client = create_client(
+        os.getenv("SUPABASE_URL"),
+        os.getenv("SUPABASE_KEY")
+    )
+    print("✅ Supabase bağlantısı aktif")
+else:
+    supabase = None
+    print("⚠️ Supabase devre dışı - env variables eksik")
 
 # ==================== MODELS ====================
 
@@ -255,8 +262,8 @@ async def query_keos_seyhan(request: QueryRequest):
     """
     
     try:
-        # Kullanıcı kredi kontrolü
-        if request.user_id:
+        # Kullanıcı kredi kontrolü (Supabase varsa)
+        if request.user_id and SUPABASE_ENABLED and supabase:
             try:
                 user_response = supabase.table('users').select('credits').eq('clerk_user_id', request.user_id).execute()
                 
@@ -271,9 +278,10 @@ async def query_keos_seyhan(request: QueryRequest):
                     'credits': user_response.data[0]['credits'] - 1
                 }).eq('clerk_user_id', request.user_id).execute()
                 
+            except HTTPException:
+                raise
             except Exception as e:
-                print(f"Supabase hatası: {e}")
-                # Supabase hatası varsa devam et (test için)
+                print(f"Supabase hatası (devam ediliyor): {e}")
         
         # KEOS Scraper ile sorgu
         scraper = KeosSeyhanScraper()
@@ -291,8 +299,8 @@ async def query_keos_seyhan(request: QueryRequest):
                 }
             )
         
-        # Supabase'e kaydet
-        if request.user_id:
+        # Supabase'e kaydet (varsa)
+        if request.user_id and SUPABASE_ENABLED and supabase:
             try:
                 query_record = {
                     'user_id': request.user_id,
@@ -301,6 +309,121 @@ async def query_keos_seyhan(request: QueryRequest):
                     'ada': request.ada,
                     'parsel': request.parsel,
                     'raw_result': result,
+                    'status': 'completed',
+                    'created_at': datetime.utcnow().isoformat()
+                }
+                
+                supabase.table('queries').insert(query_record).execute()
+                print("✅ Sorgu Supabase'e kaydedildi")
+            except Exception as e:
+                print(f"Supabase kayıt hatası (devam ediliyor): {e}")
+        
+        return {
+            'success': True,
+            'data': result,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"API Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/webhooks/clerk")
+async def clerk_webhook(request: Request):
+    """
+    Clerk webhook endpoint
+    Kullanıcı oluşturulduğunda Supabase'e kaydet
+    """
+    
+    try:
+        payload = await request.json()
+        event_type = payload.get('type')
+        
+        print(f"📥 Clerk webhook: {event_type}")
+        
+        if event_type == 'user.created':
+            user_data = payload.get('data', {})
+            
+            # Supabase'e kullanıcı ekle
+            try:
+                supabase.table('users').insert({
+                    'clerk_user_id': user_data.get('id'),
+                    'email': user_data.get('email_addresses', [{}])[0].get('email_address'),
+                    'credits': 3,  # 3 ücretsiz sorgu
+                    'created_at': datetime.utcnow().isoformat()
+                }).execute()
+                
+                print(f"✅ Kullanıcı oluşturuldu: {user_data.get('id')}")
+                
+            except Exception as e:
+                print(f"❌ Supabase hatası: {e}")
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        print(f"Webhook hatası: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/users/{user_id}/credits")
+async def get_user_credits(user_id: str):
+    """Kullanıcının kalan kredisini getir"""
+    
+    if not SUPABASE_ENABLED or not supabase:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Supabase bağlantısı aktif değil"}
+        )
+    
+    try:
+        response = supabase.table('users').select('credits').eq('clerk_user_id', user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+        
+        return {
+            'user_id': user_id,
+            'credits': response.data[0]['credits']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/queries/history/{user_id}")
+async def get_query_history(user_id: str, limit: int = 20):
+    """Kullanıcının sorgu geçmişi"""
+    
+    if not SUPABASE_ENABLED or not supabase:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Supabase bağlantısı aktif değil"}
+        )
+    
+    try:
+        response = supabase.table('queries')\
+            .select('*')\
+            .eq('user_id', user_id)\
+            .order('created_at', desc=True)\
+            .limit(limit)\
+            .execute()
+        
+        return {
+            'user_id': user_id,
+            'queries': response.data,
+            'total': len(response.data)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Uvicorn run
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)          'raw_result': result,
                     'status': 'completed',
                     'created_at': datetime.utcnow().isoformat()
                 }
