@@ -9,32 +9,7 @@
     "express": "^4.19.2",
     "playwright": "^1.42.0"
   }
-}        self.base_url = "https://keos.seyhan.bel.tr:4443/imardurumu/"
-        self.selectors = {
-            'ada_parsel_input': '#txtAdaParsel',
-            'search_button': '#btnSearchAdaParsel',
-            'imar_button': '#btnAdaParsel',
-            'parsel_link': 'a.list-group-item',
-        }
-    
-    def sorgula(self, ada: str, parsel: str) -> Dict:
-        """KEOS Seyhan sorgusu"""
-        
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
-            )
-            
-            context = browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            )
-            
-            page = context.new_page()
-            
-            try:
-                print(f"🌐 Siteye gidiliyor: {ada}/{parsel}")
+}                print(f"🌐 Siteye gidiliyor: {ada}/{parsel}")
                 page.goto(self.base_url, timeout=60000, wait_until='networkidle')
                 time.sleep(2)
                 
