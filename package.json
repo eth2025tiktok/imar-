@@ -9,32 +9,7 @@
     "express": "^4.19.2",
     "playwright": "^1.42.0"
   }
-}                print(f"🌐 Siteye gidiliyor: {ada}/{parsel}")
-                page.goto(self.base_url, timeout=60000, wait_until='networkidle')
-                time.sleep(2)
-                
-                # Ada/Parsel yaz
-                arama_metni = f"{ada}/{parsel}"
-                page.fill(self.selectors['ada_parsel_input'], arama_metni)
-                time.sleep(1)
-                
-                # Ara butonuna tıkla
-                page.click(self.selectors['search_button'])
-                time.sleep(3)
-                
-                # Sonuçları kontrol et
-                parsel_links = page.locator(self.selectors['parsel_link']).all()
-                
-                if not parsel_links:
-                    return {
-                        'success': False,
-                        'error': 'Sonuç bulunamadı',
-                        'ada': ada,
-                        'parsel': parsel
-                    }
-                
-                print(f"✅ {len(parsel_links)} sonuç bulundu")
-                
+}                
                 # Hedef parseli bul ve tıkla
                 target_text = f"{ada}/{parsel}"
                 clicked = False
