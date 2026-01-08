@@ -1,0 +1,405 @@
+"""
+KEOS Seyhan Backend API
+FastAPI + Playwright + Supabase
+"""
+
+from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Optional, Dict, List
+import os
+from datetime import datetime
+import json
+
+# Supabase
+from supabase import create_client, Client
+
+# Playwright Scraper
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+import time
+
+app = FastAPI(
+    title="KEOS Seyhan API",
+    version="1.0.0",
+    description="Ada-Parsel Sorgulama Sistemi"
+)
+
+# CORS ayarları
+ALLOWED_ORIGINS = os.getenv("FRONTEND_URL", "http://localhost:5173").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS + ["*"],  # Geliştirme için
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Supabase Client
+supabase: Client = create_client(
+    os.getenv("SUPABASE_URL", ""),
+    os.getenv("SUPABASE_KEY", "")
+)
+
+# ==================== MODELS ====================
+
+class QueryRequest(BaseModel):
+    ada: str
+    parsel: str
+    user_id: Optional[str] = None
+
+class ClerkWebhook(BaseModel):
+    type: str
+    data: Dict
+
+# ==================== KEOS SCRAPER ====================
+
+class KeosSeyhanScraper:
+    """KEOS Seyhan Ada-Parsel Scraper"""
+    
+    def __init__(self):
+        self.base_url = "https://keos.seyhan.bel.tr:4443/imardurumu/"
+        self.selectors = {
+            'ada_parsel_input': '#txtAdaParsel',
+            'search_button': '#btnSearchAdaParsel',
+            'imar_button': '#btnAdaParsel',
+            'parsel_link': 'a.list-group-item',
+        }
+    
+    def sorgula(self, ada: str, parsel: str) -> Dict:
+        """KEOS Seyhan sorgusu"""
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox']
+            )
+            
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            )
+            
+            page = context.new_page()
+            
+            try:
+                print(f"🌐 Siteye gidiliyor: {ada}/{parsel}")
+                page.goto(self.base_url, timeout=60000, wait_until='networkidle')
+                time.sleep(2)
+                
+                # Ada/Parsel yaz
+                arama_metni = f"{ada}/{parsel}"
+                page.fill(self.selectors['ada_parsel_input'], arama_metni)
+                time.sleep(1)
+                
+                # Ara butonuna tıkla
+                page.click(self.selectors['search_button'])
+                time.sleep(3)
+                
+                # Sonuçları kontrol et
+                parsel_links = page.locator(self.selectors['parsel_link']).all()
+                
+                if not parsel_links:
+                    return {
+                        'success': False,
+                        'error': 'Sonuç bulunamadı',
+                        'ada': ada,
+                        'parsel': parsel
+                    }
+                
+                print(f"✅ {len(parsel_links)} sonuç bulundu")
+                
+                # Hedef parseli bul ve tıkla
+                target_text = f"{ada}/{parsel}"
+                clicked = False
+                
+                for link in parsel_links:
+                    link_text = link.inner_text()
+                    if target_text in link_text:
+                        print(f"🎯 Hedef bulundu: {link_text}")
+                        link.click()
+                        clicked = True
+                        break
+                
+                if not clicked and len(parsel_links) > 0:
+                    print("⚠️ Tam eşleşme yok, ilk sonuç seçiliyor")
+                    parsel_links[0].click()
+                
+                time.sleep(2)
+                
+                # İmar Durumu butonuna tıkla
+                print("📋 İmar durumu açılıyor...")
+                imar_button = page.locator(self.selectors['imar_button'])
+                imar_button.wait_for(state='visible', timeout=10000)
+                imar_button.click()
+                time.sleep(3)
+                
+                # Yeni sekme kontrolü
+                all_pages = context.pages
+                if len(all_pages) > 1:
+                    page = all_pages[-1]
+                    print("📄 Yeni sekme algılandı")
+                
+                page.wait_for_load_state('networkidle')
+                time.sleep(2)
+                
+                # Sayfayı parse et
+                sonuc = self._parse_imar_durumu(page, ada, parsel)
+                sonuc['success'] = True
+                
+                # Screenshot al
+                screenshot_bytes = page.screenshot(full_page=True)
+                sonuc['screenshot_base64'] = screenshot_bytes.hex()
+                
+                print("✅ Sorgulama başarılı!")
+                return sonuc
+                
+            except PlaywrightTimeout as e:
+                print(f"❌ Timeout: {e}")
+                return {
+                    'success': False,
+                    'error': f'Timeout: {str(e)}',
+                    'ada': ada,
+                    'parsel': parsel
+                }
+            except Exception as e:
+                print(f"❌ Hata: {e}")
+                return {
+                    'success': False,
+                    'error': str(e),
+                    'ada': ada,
+                    'parsel': parsel
+                }
+            finally:
+                browser.close()
+    
+    def _parse_imar_durumu(self, page, ada: str, parsel: str) -> Dict:
+        """İmar durumu bilgilerini çıkar"""
+        
+        sonuc = {
+            'ada': ada,
+            'parsel': parsel,
+            'il': 'Adana',
+            'ilce': 'Seyhan',
+            'imar_durumu': None,
+            'kaks': None,
+            'yapi_nizami': None,
+            'yukseklik': None,
+            'alan': None,
+            'raw_html': page.content(),
+            'diger_bilgiler': {}
+        }
+        
+        try:
+            # Tablolardan bilgi çek
+            tables = page.locator('table').all()
+            
+            for table in tables:
+                rows = table.locator('tr').all()
+                for row in rows:
+                    try:
+                        cells = row.locator('td').all()
+                        if len(cells) >= 2:
+                            key = cells[0].inner_text().strip().lower()
+                            value = cells[1].inner_text().strip()
+                            
+                            if 'imar' in key or 'durum' in key or 'fonksiyon' in key:
+                                sonuc['imar_durumu'] = value
+                            elif 'kaks' in key or 'emsal' in key:
+                                sonuc['kaks'] = value
+                            elif 'yapı' in key and 'nizam' in key:
+                                sonuc['yapi_nizami'] = value
+                            elif 'yükseklik' in key or 'kat' in key:
+                                sonuc['yukseklik'] = value
+                            elif 'alan' in key:
+                                sonuc['alan'] = value
+                            else:
+                                sonuc['diger_bilgiler'][cells[0].inner_text().strip()] = value
+                    except:
+                        continue
+            
+        except Exception as e:
+            print(f"⚠️ Parse hatası: {e}")
+        
+        return sonuc
+
+# ==================== ROUTES ====================
+
+@app.get("/")
+async def root():
+    """Health check"""
+    return {
+        "status": "ok",
+        "service": "KEOS Seyhan API",
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "healthy"}
+
+@app.post("/api/query/keos-seyhan")
+async def query_keos_seyhan(request: QueryRequest):
+    """
+    KEOS Seyhan ada-parsel sorgusu
+    
+    Body:
+    {
+        "ada": "10568",
+        "parsel": "9",
+        "user_id": "optional_clerk_user_id"
+    }
+    """
+    
+    try:
+        # Kullanıcı kredi kontrolü
+        if request.user_id:
+            try:
+                user_response = supabase.table('users').select('credits').eq('clerk_user_id', request.user_id).execute()
+                
+                if not user_response.data:
+                    raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+                
+                if user_response.data[0]['credits'] <= 0:
+                    raise HTTPException(status_code=402, detail="Yetersiz kredi")
+                
+                # Kredi düş
+                supabase.table('users').update({
+                    'credits': user_response.data[0]['credits'] - 1
+                }).eq('clerk_user_id', request.user_id).execute()
+                
+            except Exception as e:
+                print(f"Supabase hatası: {e}")
+                # Supabase hatası varsa devam et (test için)
+        
+        # KEOS Scraper ile sorgu
+        scraper = KeosSeyhanScraper()
+        result = scraper.sorgula(
+            ada=request.ada,
+            parsel=request.parsel
+        )
+        
+        if not result.get('success'):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    'success': False,
+                    'error': result.get('error', 'Sorgulama başarısız')
+                }
+            )
+        
+        # Supabase'e kaydet
+        if request.user_id:
+            try:
+                query_record = {
+                    'user_id': request.user_id,
+                    'il': 'Adana',
+                    'ilce': 'Seyhan',
+                    'ada': request.ada,
+                    'parsel': request.parsel,
+                    'raw_result': result,
+                    'status': 'completed',
+                    'created_at': datetime.utcnow().isoformat()
+                }
+                
+                supabase.table('queries').insert(query_record).execute()
+            except Exception as e:
+                print(f"Supabase kayıt hatası: {e}")
+        
+        return {
+            'success': True,
+            'data': result,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"API Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/webhooks/clerk")
+async def clerk_webhook(request: Request):
+    """
+    Clerk webhook endpoint
+    Kullanıcı oluşturulduğunda Supabase'e kaydet
+    """
+    
+    try:
+        payload = await request.json()
+        event_type = payload.get('type')
+        
+        print(f"📥 Clerk webhook: {event_type}")
+        
+        if event_type == 'user.created':
+            user_data = payload.get('data', {})
+            
+            # Supabase'e kullanıcı ekle
+            try:
+                supabase.table('users').insert({
+                    'clerk_user_id': user_data.get('id'),
+                    'email': user_data.get('email_addresses', [{}])[0].get('email_address'),
+                    'credits': 3,  # 3 ücretsiz sorgu
+                    'created_at': datetime.utcnow().isoformat()
+                }).execute()
+                
+                print(f"✅ Kullanıcı oluşturuldu: {user_data.get('id')}")
+                
+            except Exception as e:
+                print(f"❌ Supabase hatası: {e}")
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        print(f"Webhook hatası: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/users/{user_id}/credits")
+async def get_user_credits(user_id: str):
+    """Kullanıcının kalan kredisini getir"""
+    
+    try:
+        response = supabase.table('users').select('credits').eq('clerk_user_id', user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+        
+        return {
+            'user_id': user_id,
+            'credits': response.data[0]['credits']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/queries/history/{user_id}")
+async def get_query_history(user_id: str, limit: int = 20):
+    """Kullanıcının sorgu geçmişi"""
+    
+    try:
+        response = supabase.table('queries')\
+            .select('*')\
+            .eq('user_id', user_id)\
+            .order('created_at', desc=True)\
+            .limit(limit)\
+            .execute()
+        
+        return {
+            'user_id': user_id,
+            'queries': response.data,
+            'total': len(response.data)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Uvicorn run
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
