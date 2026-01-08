@@ -1,41 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
-.venv
+# Supabase (OPSİYONEL - sonra eklenecek)
+# SUPABASE_URL=https://your-project.supabase.co
+# SUPABASE_KEY=your_supabase_anon_key
 
-# Environment
-.env
-.env.local
+# Clerk (OPSİYONEL - sonra eklenecek)
+# CLERK_SECRET_KEY=sk_live_your_clerk_secret_key
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# Frontend
+#FRONTEND_URL=http://localhost:5173,https://yourapp.vercel.app
 
-# Playwright
-.playwright/
-playwright/.browsers/
-*.png
-*.jpg
-*.jpeg
-error_*.png
-keos_*.png
-
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Test
-.pytest_cache/
-.coverage
-htmlcov/
+# Port (Render otomatik ayarlar)
+PORT=8000
